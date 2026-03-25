@@ -5,12 +5,13 @@ from bs4 import BeautifulSoup, NavigableString
 import time
 import re
 import requests
+import gzip
 from urllib.parse import urlparse
 
 app = FastAPI(
     title="Scraper API",
     description="API universal para extraer capítulos de sitios de novelas",
-    version="3.0.0"
+    version="3.4.0"
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -21,11 +22,13 @@ SITE_RULES = {
         "selector": "div.prose",
         "modo": "parrafos",
         "cap_patron": r"/projects/.+/.+",
+        "requiere_playwright": True,
     },
     "novelasligera.com": {
         "selector": "div.entry-content, div.texto-capitulo, div#content article",
         "modo": "parrafos",
         "cap_patron": r"/novela/.+/.+",
+        "requiere_playwright": True,
     },
     "wuxiaworld.com": {
         "selector": "div.chapter-content, div#chapter-content",
@@ -34,19 +37,22 @@ SITE_RULES = {
         "requiere_playwright": True,
     },
     "maehwasup.com": {
-        "selector": "div.entry-content",
+        "selector": "div.entry-content, article, .post",
         "modo": "parrafos",
         "cap_patron": r"/\d{4}/\d{2}/\d{2}/.+",
-        "requiere_playwright": True,   # bloquea requests, necesita browser real
+        "requiere_playwright": True,
     },
     "blogspot.com": {
-        "selector": "div.post-body",
-        "modo": "spans",
+        "selector": "div.post-body, div.entry-content",
+        "modo": "parrafos",
+        "cap_patron": r"capitulo\s*\d+|ragnarok",
+        "requiere_playwright": False,
     },
     "wordpress.com": {
         "selector": "div.entry-content",
         "modo": "parrafos",
         "cap_patron": r"/\d{4}/\d{2}/\d{2}/.+",
+        "requiere_playwright": False,
     },
 }
 
@@ -68,13 +74,16 @@ SELECTORES_GENERICOS = [
 ]
 
 # ─────────────────────────────────────────────────────────────
-# PATRONES DE BASURA
+# PATRONES DE BASURA (VERSIÓN FINAL MEJORADA)
 # ─────────────────────────────────────────────────────────────
 BASURA_EXACTA = {
     "anterior", "siguiente", "indice", "index",
     "next", "prev", "previous", "next chapter", "previous chapter",
     "table of contents", "compartir", "share", "tweet",
-    "pagina anterior", "pagina siguiente",
+    "pagina anterior", "pagina siguiente", "inicio", "home",
+    "privacy", "dmca", "faq", "login", "register",
+    "responder", "reply", "delete", "like", "recomendar",
+    "comentarios", "comments", "glossary", "about",
 }
 
 BASURA_RE = [re.compile(p, re.IGNORECASE) for p in [
@@ -86,8 +95,45 @@ BASURA_RE = [re.compile(p, re.IGNORECASE) for p in [
     r"publicado\s*por", r"compartan\s*esta",
     r"^\s*nota:\s*[!]?compartan",
     r"^https?://\S+$",
-    r"^\d+\s*$",
     r"skydark\s*:", r"traductor\s*:",
+    
+    # Filtros para comentarios y notas de traductor
+    r"si estas leyendo las novelas que traduzco",
+    r"puedes «patrocinar capítulos»",
+    r"para una traducción más rápida",
+    r"no importa si ya a sido pausada",
+    r"sera traducida si haces el patrocinio",
+    r"no se olviden de dejar la sigla",
+    r"si patrocinan algunos capítulo",
+    r"o déjenme alguna reseña",
+    r"os agradezco demasiado",
+    r"nt:\s*la moneda es dolares",
+    r"más conocidos como gringos",
+    r"patrocinio\s*5\$?\s*=\s*4\s*cap",
+    r"invitame\s*un\s*cafe",
+    r"^comentarios?\s*\d*\s*$",
+    r"^\d+\s*(respuestas?|replies?)\s*$",
+    r"like\s*\d+",
+    r"recomendar\s*\d*",
+    r"compartir\s*\d*",
+    r"twitter\s*$",
+    r"facebook\s*$",
+    r"whatsapp\s*$",
+    r"telegram\s*$",
+    
+    # Filtros para menús y navegación
+    r"^(rotmhs\s*glossary|about\s*page|home\s*page)$",
+    r"\|\|",
+    r"^(first|previous|next|last)\s+(part|chapter|page)",
+    r"(part|cap[i]tulo)\s+(i|ii|iii|iv|v|vi|vii|viii|ix|x)\s*(>>>|<<<)",
+    r">>>\s*$",
+    r"<<<\s*$",
+    r"^\s*❀\s*$",
+    r"^_{10,}$",
+    r"^\s*[-=*]{10,}\s*$",
+    
+    # Líneas vacías o solo espacios
+    r"^\s*$",
 ]]
 
 NAV_RE = re.compile(
@@ -121,33 +167,46 @@ NEXT_PAGE_RE = re.compile(
 
 
 def es_basura(texto: str) -> bool:
+    """Filtra líneas de basura, comentarios, notas de traductor y menús"""
     t = texto.strip()
-    if not t:
+    if not t or len(t) < 3:
         return True
-    if t.lower() in BASURA_EXACTA:
+    
+    # Limpiar números de likes/comentarios
+    t_clean = re.sub(r'^\d+\s*', '', t)
+    
+    # Filtrar líneas que parecen menús (con ||)
+    if "||" in t_clean:
         return True
-    if NAV_RE.match(t):
+    
+    # Filtrar líneas que son solo enlaces de navegación
+    if re.match(r'^(first|previous|next|last)\s+(chapter|page|part)$', t_clean, re.IGNORECASE):
+        return True
+    
+    # Filtrar decoraciones
+    if re.match(r'^[❀☆★✦✧✿🌸]+$', t_clean):
+        return True
+    
+    if t_clean.lower() in BASURA_EXACTA:
+        return True
+    if NAV_RE.match(t_clean):
         return True
     for pat in BASURA_RE:
-        if pat.search(t):
+        if pat.search(t_clean):
             return True
-    if len(t) < 80:
-        lower = t.lower()
-        for pal in ("anterior", "siguiente", "pagina anterior", "pagina siguiente"):
-            if lower == pal:
-                return True
+    
+    # Filtrar líneas que son solo números
+    if re.match(r'^\d+$', t):
+        return True
+    
     return False
 
 
 # ─────────────────────────────────────────────────────────────
-# OBTENER HTML
+# OBTENER HTML (CON MANEJO DE GZIP Y CLOUDFLARE)
 # ─────────────────────────────────────────────────────────────
 HEADERS_NAVEGADOR = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
@@ -155,44 +214,86 @@ HEADERS_NAVEGADOR = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-
 def obtener_html_requests(url: str):
     try:
         r = requests.get(url, headers=HEADERS_NAVEGADOR, timeout=15)
-        if r.status_code == 200 and len(r.text) > 5000:
-            return r.text
-    except Exception:
-        pass
+        if r.status_code == 200:
+            # Manejar contenido comprimido
+            if 'gzip' in r.headers.get('Content-Encoding', ''):
+                try:
+                    html = gzip.decompress(r.content).decode('utf-8')
+                except:
+                    html = r.text
+            else:
+                html = r.text
+            
+            # Verificar que es HTML válido
+            if len(html) > 5000 and ('<html' in html.lower() or '<div' in html.lower()):
+                return html
+    except Exception as e:
+        print(f"Error en requests: {e}")
     return None
 
-
-def obtener_html_playwright(url: str) -> str:
+def obtener_html_playwright(url: str, sitio: str = "") -> str:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-web-security'
+            ]
+        )
         context = browser.new_context(
             user_agent=HEADERS_NAVEGADOR["User-Agent"],
             viewport={"width": 1280, "height": 720},
             locale="es-MX",
             extra_http_headers={"Accept-Language": "es-MX,es;q=0.9,en;q=0.8"},
+            ignore_https_errors=True
         )
         page = context.new_page()
+        
         try:
             Stealth().apply_stealth_sync(page)
-        except Exception:
+        except:
             pass
-        page.goto(url, wait_until="networkidle", timeout=35000)
-        page.wait_for_timeout(2500)
+        
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        
+        # Manejo específico para Cloudflare
+        if "maehwasup.com" in sitio or "novelasligera.com" in sitio:
+            try:
+                page.wait_for_function(
+                    "document.body.innerText.includes('Checking your browser') === false",
+                    timeout=45000
+                )
+                page.wait_for_timeout(3000)
+            except:
+                pass
+        
+        # Esperar a que aparezca el contenido
+        try:
+            page.wait_for_selector("div.entry-content, article, .post, div.prose, div.texto-capitulo", timeout=15000)
+        except:
+            pass
+        
+        # Scroll para lazy loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(2000)
+        
         html = page.content()
         browser.close()
     return html
 
-
-def obtener_html(url: str, forzar_playwright: bool = False) -> str:
-    if not forzar_playwright:
-        html = obtener_html_requests(url)
-        if html:
-            return html
-    return obtener_html_playwright(url)
+def obtener_html(url: str, forzar_playwright: bool = False, sitio: str = "") -> str:
+    if forzar_playwright:
+        return obtener_html_playwright(url, sitio)
+    
+    html = obtener_html_requests(url)
+    if html and len(html) > 5000 and not "Checking your browser" in html:
+        return html
+    
+    return obtener_html_playwright(url, sitio)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -207,7 +308,6 @@ def extraer_modo_parrafos(elemento) -> list:
             vistos.add(texto)
             parrafos.append(texto)
     return parrafos
-
 
 def extraer_modo_spans(elemento) -> list:
     parrafos = []
@@ -236,7 +336,6 @@ def extraer_modo_spans(elemento) -> list:
     guardar()
     return parrafos
 
-
 def extraer_modo_generico(elemento) -> list:
     texto_crudo = elemento.get_text(separator="\n")
     parrafos = []
@@ -248,19 +347,31 @@ def extraer_modo_generico(elemento) -> list:
             parrafos.append(t)
     return parrafos
 
-
 def limpiar_elemento(elemento):
+    """Limpia elementos no deseados del contenido"""
     for sel in [
         "script", "style", "iframe", "noscript", "button",
         "nav", "header", "footer", "aside", "form", "ins",
         ".comments", ".comment-thread", ".share-buttons",
         ".post-share", ".related-posts", ".navigation",
         ".nav-links", ".wp-block-buttons", ".author-box",
-        "#disqus_thread",
+        "#disqus_thread", ".comment-list", ".comment-respond",
+        ".post-navigation", ".page-navigation", ".pagination",
+        ".menu", ".navbar", ".sidebar", ".widget",
+        ".breadcrumbs", ".breadcrumb", ".post-meta",
     ]:
         for tag in elemento.select(sel):
             tag.decompose()
-
+    
+    # Eliminar elementos <a> que contengan texto de navegación
+    for a in elemento.find_all("a"):
+        texto = a.get_text(strip=True).lower()
+        if texto in ["next", "prev", "previous", "next chapter", "previous chapter", "next page", "previous page", "first", "last"]:
+            a.decompose()
+        elif re.match(r'^(first|previous|next|last)\s+(chapter|page|part)$', texto, re.IGNORECASE):
+            a.decompose()
+        elif "||" in texto:
+            a.decompose()
 
 def unir_parrafos(parrafos: list) -> str:
     resultado = []
@@ -271,7 +382,6 @@ def unir_parrafos(parrafos: list) -> str:
         else:
             resultado.append(texto)
     return "\n\n".join(resultado)
-
 
 def procesar_contenido(elemento, modo: str = "auto") -> str:
     limpiar_elemento(elemento)
@@ -307,31 +417,34 @@ def obtener_dominio(url: str) -> str:
         return ".".join(partes[-2:])
     return hostname
 
-
 def get_regla(url: str) -> dict:
     return SITE_RULES.get(obtener_dominio(url), {})
 
-
 def encontrar_elemento(soup, url: str):
     regla = get_regla(url)
+    
+    # Selector específico
     if regla.get("selector"):
         for sel in regla["selector"].split(","):
             el = soup.select_one(sel.strip())
-            if el and len(el.get_text(strip=True)) > 100:
+            if el and len(el.get_text(strip=True)) > 50:
                 return el, regla.get("modo", "auto")
-
+    
+    # Selectores genéricos
     for selector in SELECTORES_GENERICOS:
         el = soup.select_one(selector)
-        if el and len(el.get_text(strip=True)) > 200:
+        if el and len(el.get_text(strip=True)) > 100:
             return el, "auto"
-
+    
+    # Fallback: div con más texto
     mejor, mejor_len = None, 0
     for div in soup.find_all("div"):
         t = div.get_text(strip=True)
-        if 200 < len(t) < 200000 and len(t) > mejor_len:
+        if len(t) > mejor_len and len(t) > 200:
             mejor_len = len(t)
             mejor = div
-    return mejor, "auto"
+    
+    return mejor, "auto" if mejor else None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -346,7 +459,6 @@ EXCLUIDOS_SEGMENTOS = {
     "category", "author", "feed", "page", "wp-content",
     "wp-admin", "cdn-cgi", "reclutamiento", "novelas-chinas",
     "novelas-coreanas", "novelas-japonesas", "novelas-18",
-    "novelas-chinas", "novela",  # "novela" solo es el índice raíz
 }
 
 CAP_TEXTO_RE = re.compile(
@@ -357,37 +469,29 @@ CAP_TEXTO_RE = re.compile(
     re.IGNORECASE
 )
 
-
 def es_capitulo_por_url(href_norm: str, base: str, patron_re=None) -> bool:
     if not href_norm.startswith(base):
         return False
     parte = href_norm[len(base):].strip("/")
     if not parte:
         return False
-    # Si hay patron especifico, es el UNICO criterio de URL para ese dominio.
-    # Si no matchea, rechazar — evita falsos positivos como /announcements/...
     if patron_re:
         return bool(patron_re.search(href_norm))
-    # WordPress con fecha
     if WP_DATE_RE.search(href_norm):
         return True
-    # Generico: multiples segmentos sin palabras excluidas
     segmentos = [s for s in parte.lower().split("/") if s]
     if any(s in EXCLUIDOS_SEGMENTOS for s in segmentos):
         return False
     return len(segmentos) >= 2
 
-
 def es_capitulo_por_texto(texto: str) -> bool:
     return bool(CAP_TEXTO_RE.search(texto))
-
 
 def base_origen(url: str) -> str:
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}"
 
-
-def extraer_capitulos_soup(soup, base: str, patron_re=None):
+def extraer_capitulos_soup(soup, base: str, patron_re=None, sitio: str = ""):
     caps = []
     vistos = set()
     siguiente = None
@@ -396,13 +500,35 @@ def extraer_capitulos_soup(soup, base: str, patron_re=None):
         href = a["href"].strip()
         texto = re.sub(r'\s+', ' ', a.get_text()).strip()
 
+        # Filtros básicos
         if not href or not texto or len(texto) > 150:
             continue
         if href.startswith(("#", "javascript:", "mailto:")):
             continue
         if texto.lower() in TEXTOS_NAV_IGNORADOS:
             continue
+        if es_basura(texto):
+            continue
+        
+        # FILTRO ESPECIAL PARA BLOGSPOT: ignorar enlaces que parecen comentarios o fechas
+        if "blogspot.com" in sitio:
+            # Ignorar líneas que son fechas (patrón de mes/día/año)
+            if re.match(r'^[A-Za-z]+ \d{1,2},? \d{4}', texto):
+                continue
+            # Ignorar líneas que son nombres de comentaristas
+            if re.match(r'^[A-Za-z\u00C0-\u00FF]+(?: [A-Za-z\u00C0-\u00FF]+)?\s*(?:dijo|said|replied|respondió)', texto, re.IGNORECASE):
+                continue
+            # Ignorar "Reply", "Delete", etc.
+            if texto.lower() in ["reply", "delete", "responder", "eliminar"]:
+                continue
+            # Ignorar enlaces de comentarios numerados
+            if re.match(r'^#\d+$', texto):
+                continue
+            # Ignorar enlaces que contienen "comments" o "comentarios"
+            if "comments" in texto.lower() or "comentarios" in texto.lower():
+                continue
 
+        # Construir URL absoluta
         if href.startswith("/"):
             url_abs = base + href
         elif href.startswith("http"):
@@ -411,10 +537,11 @@ def extraer_capitulos_soup(soup, base: str, patron_re=None):
             continue
 
         url_norm = url_abs.rstrip("/")
-
+        
         if not url_norm.startswith(base):
             continue
 
+        # Detectar paginación
         if NEXT_PAGE_RE.match(texto) or re.search(r'/page/\d+/?$', url_norm):
             if url_norm not in vistos:
                 siguiente = url_abs
@@ -423,16 +550,25 @@ def extraer_capitulos_soup(soup, base: str, patron_re=None):
         if url_norm in vistos:
             continue
 
-        # Si el dominio tiene patron especifico, la URL es el criterio definitivo.
-        # El texto solo se usa como criterio cuando NO hay patron (deteccion generica).
+        # Verificar si es un capítulo
+        es_capitulo = False
         if patron_re:
             if es_capitulo_por_url(url_norm, base, patron_re):
-                caps.append({"titulo": texto, "url": url_abs})
-                vistos.add(url_norm)
+                es_capitulo = True
         else:
             if es_capitulo_por_url(url_norm, base, None) or es_capitulo_por_texto(texto):
-                caps.append({"titulo": texto, "url": url_abs})
-                vistos.add(url_norm)
+                es_capitulo = True
+        
+        # FILTRO ESPECIAL PARA BLOGSPOT: solo aceptar si el texto contiene "Capitulo" o "Ragnarok"
+        if "blogspot.com" in sitio:
+            if "capitulo" in texto.lower() or "chapter" in texto.lower() or "ragnarok" in texto.lower():
+                es_capitulo = True
+            else:
+                es_capitulo = False
+
+        if es_capitulo:
+            caps.append({"titulo": texto[:100], "url": url_abs})
+            vistos.add(url_norm)
 
     return caps, siguiente
 
@@ -444,27 +580,22 @@ def extraer_capitulos_soup(soup, base: str, patron_re=None):
 def inicio():
     return {
         "estado": "activo",
-        "version": "3.0.0",
-        "sitios_con_soporte_explicito": list(SITE_RULES.keys()),
+        "version": "3.4.0",
+        "sitios_soportados": list(SITE_RULES.keys()),
         "endpoints": {
             "listar_capitulos": "GET /capitulos?url=<url>&paginas=5",
-            "leer_capitulo":    "GET /leer?url=<url>",
-            "debug":            "GET /debug?url=<url>",
-            "docs":             "GET /docs",
+            "leer_capitulo": "GET /leer?url=<url>",
+            "debug": "GET /debug?url=<url>",
         }
     }
 
-
 @app.get("/capitulos")
 def listar_capitulos(url: str, paginas: int = 5):
-    """
-    Lista todos los capitulos de una novela.
-    paginas = cuantas paginas de indice recorrer (default 5).
-    """
     regla = get_regla(url)
     forzar_pw = regla.get("requiere_playwright", False)
     patron_str = regla.get("cap_patron")
     patron_re = re.compile(patron_str) if patron_str else None
+    sitio = obtener_dominio(url)
 
     base = base_origen(url)
     todos = []
@@ -478,12 +609,12 @@ def listar_capitulos(url: str, paginas: int = 5):
         paginas_vistas.add(pagina_actual)
 
         try:
-            html = obtener_html(pagina_actual, forzar_playwright=forzar_pw)
+            html = obtener_html(pagina_actual, forzar_playwright=forzar_pw, sitio=sitio)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error cargando {pagina_actual}: {e}")
 
         soup = BeautifulSoup(html, "html.parser")
-        caps, siguiente = extraer_capitulos_soup(soup, base, patron_re)
+        caps, siguiente = extraer_capitulos_soup(soup, base, patron_re, sitio=sitio)
 
         for cap in caps:
             norm = cap["url"].rstrip("/")
@@ -499,18 +630,14 @@ def listar_capitulos(url: str, paginas: int = 5):
         "capitulos": todos,
     }
 
-
 @app.get("/leer")
 def leer_capitulo(url: str):
-    """
-    Lee y extrae el texto limpio de un capitulo.
-    Detecta automaticamente la estructura del sitio.
-    """
     regla = get_regla(url)
     forzar_pw = regla.get("requiere_playwright", False)
+    sitio = obtener_dominio(url)
 
     try:
-        html = obtener_html(url, forzar_playwright=forzar_pw)
+        html = obtener_html(url, forzar_playwright=forzar_pw, sitio=sitio)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error cargando pagina: {e}")
 
@@ -526,28 +653,30 @@ def leer_capitulo(url: str):
     return {
         "url": url,
         "acceso": "bloqueado_o_diferente",
-        "mensaje": "No se encontro contenido. Puede necesitar pago o estructura no soportada.",
+        "mensaje": "No se encontró contenido. Puede necesitar pago o estructura no soportada.",
         "contenido_visible": texto_visible[:3000],
     }
 
-
 @app.get("/debug")
 def debug(url: str):
-    """
-    Diagnostico: muestra metodo HTML usado, bytes recibidos y links encontrados.
-    Util para entender por que un sitio da 0 resultados.
-    """
-    html_req = obtener_html_requests(url)
-    metodo = "requests" if html_req else "playwright"
+    regla = get_regla(url)
+    forzar_pw = regla.get("requiere_playwright", False)
+    sitio = obtener_dominio(url)
+    
     try:
-        html = html_req or obtener_html_playwright(url)
+        html = obtener_html(url, forzar_playwright=forzar_pw, sitio=sitio)
+        metodo = "playwright (forzado)" if forzar_pw else "requests/playwright"
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     soup = BeautifulSoup(html, "html.parser")
     base = base_origen(url)
     dominio = obtener_dominio(url)
-    regla = get_regla(url)
+
+    elemento, modo = encontrar_elemento(soup, url)
+    contenido_preview = ""
+    if elemento:
+        contenido_preview = elemento.get_text()[:500]
 
     links = []
     for a in soup.find_all("a", href=True):
@@ -567,8 +696,16 @@ def debug(url: str):
         "url": url,
         "dominio_detectado": dominio,
         "regla_aplicada": regla,
-        "metodo_html": metodo,
+        "metodo_usado": metodo,
         "html_bytes": len(html),
-        "total_links_encontrados": len(links),
-        "links_muestra": links[:40],
+        "contenido_encontrado": elemento is not None,
+        "modo_usado": modo if elemento else None,
+        "preview_contenido": contenido_preview[:500] if contenido_preview else "No encontrado",
+        "total_links": len(links),
+        "links_muestra": links[:30],
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
