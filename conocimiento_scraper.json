@@ -1,0 +1,36 @@
+{
+  "maehwasup.com": {
+    "dominio": "maehwasup.com",
+    "selector_contenido": null,
+    "selector_capitulos": null,
+    "patron_url_capitulo": "/\\d{4}/\\d{2}/\\d{2}/",
+    "tipo_paginacion": "boton",
+    "patron_paginacion": null,
+    "requiere_playwright": false,
+    "confianza": 1.0,
+    "veces_usado": 6,
+    "veces_exitoso": 6,
+    "ultimo_acceso": "2026-03-29T17:32:23.878112",
+    "ejemplos_urls": [
+      "https://maehwasup.com/"
+    ],
+    "errores_comunes": []
+  },
+  "skydemonorder.com": {
+    "dominio": "skydemonorder.com",
+    "selector_contenido": "div.min-h-screen.overflow-hidden",
+    "selector_capitulos": null,
+    "patron_url_capitulo": null,
+    "tipo_paginacion": "ninguno",
+    "patron_paginacion": null,
+    "requiere_playwright": false,
+    "confianza": 1.0,
+    "veces_usado": 4,
+    "veces_exitoso": 4,
+    "ultimo_acceso": "2026-03-29T17:36:43.781061",
+    "ejemplos_urls": [
+      "https://skydemonorder.com/projects/3801994495-return-of-the-mount-hua-sect"
+    ],
+    "errores_comunes": []
+  }
+}
