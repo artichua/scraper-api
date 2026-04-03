@@ -23,7 +23,7 @@ def extraer_texto_dinamico(url: str, dominio: str, forzar_pw: bool = False) -> d
     soup = BeautifulSoup(html, "html.parser")
     
     # Eliminar basura
-    for sel in ["script", "style", "nav", "header", "footer", "aside", ".comments", "#comments", ".sidebar"]:
+    for sel in ["script", "style", "nav", "header", "footer", "aside", ".comments", "#comments", ".sidebar", ".navigation", "#navigation", ".footer", "#footer", ".header", "#header", ".menu", "#menu", ".top-bar", ".bottom-bar"]:
         for tag in soup.select(sel):
             tag.decompose()
             
@@ -174,12 +174,10 @@ class ScraperInteligente:
             if not href or not texto or len(texto) > 150:
                 continue
             
-            if href.startswith("/"):
-                url_abs = urljoin(base, href)
-            elif href.startswith("http"):
-                url_abs = href
-            else:
+            if href.startswith("javascript:") or href.startswith("mailto:") or href.startswith("#"):
                 continue
+            
+            url_abs = urljoin(url, href)
             
             es_capitulo = False
             texto_lower = texto.lower()

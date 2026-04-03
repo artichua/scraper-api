@@ -13,7 +13,7 @@ BASURA_EXACTA = {
 }
 
 BASURA_RE = [re.compile(p, re.IGNORECASE) for p in [
-    r"discord\.gg", r"patreon\.com", r"t\.me/",
+    r"discord\.gg", r"patreon\.com", r"t\.me/", r"github\.com",
     r"novel\s*updates", r"(read|lee)\s*(more|mas)\s*at",
     r"support\s*us", r"donate", r"buy\s*coins",
     r"si estas leyendo las novelas que traduzco",
@@ -23,6 +23,10 @@ BASURA_RE = [re.compile(p, re.IGNORECASE) for p in [
     r"^comentarios?\s*\d*\s*$",
     r"\|\|",
     r"^\s*❀\s*$",
+    r"edit this page", r"download full epub", r"formatting guide",
+    r"contribution guide", r"report issues on our discord",
+    r"connect with the community", r"join discord", r"how to format text",
+    r"read this first before doing anything"
 ]]
 
 SELECTORES_GENERICOS = [
