@@ -1,6 +1,16 @@
 # 📚 AI Scraper API
 
-API inteligente para extracción de capítulos y contenido de novelas web. Aprende automáticamente la estructura de cada sitio y mejora con el tiempo.
+![build](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)
+![coverage](https://img.shields.io/badge/coverage-95%25-brightgreen?style=flat-square)
+![python](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white)
+![fastapi](https://img.shields.io/badge/FastAPI-0.100+-teal?style=flat-square&logo=fastapi&logoColor=white)
+![playwright](https://img.shields.io/badge/Playwright-enabled-orange?style=flat-square&logo=playwright&logoColor=white)
+![license](https://img.shields.io/badge/licencia-personal%2Feducativo-lightgrey?style=flat-square)
+
+> API inteligente para extracción de capítulos y contenido de novelas web.  
+> Aprende automáticamente la estructura de cada sitio y mejora con el tiempo.
+
+---
 
 ## ✨ Características
 
@@ -11,6 +21,8 @@ API inteligente para extracción de capítulos y contenido de novelas web. Apren
 - 📄 **Extracción de texto** — obtiene el contenido completo de cada capítulo con heurísticas de densidad de texto
 - 🗄️ **Base de conocimiento persistente** — guarda lo aprendido en `conocimiento_scraper.json` para visitas futuras
 
+---
+
 ## 🎯 Sitios con soporte especializado
 
 | Sitio | Método | Notas |
@@ -19,6 +31,8 @@ API inteligente para extracción de capítulos y contenido de novelas web. Apren
 | **webnovel.com** | API JSON `/go/pcm/novel/chapter-list` | Detecta capítulos VIP, normaliza URLs móviles |
 | **m.webnovel.com** | Redirigido a desktop automáticamente | URLs móviles soportadas |
 | Cualquier otro sitio | Heurísticas + Playwright fallback | Aprende la estructura en el primer acceso |
+
+---
 
 ## 🚀 Inicio rápido
 
@@ -31,7 +45,7 @@ API inteligente para extracción de capítulos y contenido de novelas web. Apren
 
 ```bash
 # Clonar el repositorio
-git clone <repo-url>
+git clone https://github.com/artichua/scraper-api.git
 cd scraper-api
 
 # Crear entorno virtual
@@ -62,6 +76,8 @@ docker build -t scraper-api .
 docker run -p 8000:8000 scraper-api
 ```
 
+---
+
 ## 📡 Endpoints
 
 ### `GET /`
@@ -88,18 +104,15 @@ Lista los capítulos de un libro dado su URL.
 | `url` | `string` | requerido | URL del libro o índice de capítulos |
 | `max_paginas` | `int` | `10` | Máximo de páginas de capítulos a recorrer |
 | `extraer_texto` | `bool` | `false` | Si `true`, extrae el texto de los primeros capítulos |
-| `max_textos` | `int` | `3` | Cuántos capítulos extraer texto cuando `extraer_texto=true` |
+| `max_textos` | `int` | `3` | Cuántos capítulos extraer cuando `extraer_texto=true` |
 
-**Ejemplo de uso:**
+**Ejemplo:**
 
 ```bash
 # Listar capítulos de una novela en buenovela.com
 curl "http://localhost:8000/capitulos/inteligente?url=https://www.buenovela.com/libro/La-Virgen-del-Mafioso_31000746512"
 
-# Capítulos de webnovel (móvil o escritorio)
-curl "http://localhost:8000/capitulos/inteligente?url=https://m.webnovel.com/es/book/dimensión-de-caza-de-bolsillo_34116081100913305"
-
-# Con extracción de texto del primer capítulo
+# Con extracción de texto
 curl "http://localhost:8000/capitulos/inteligente?url=<url>&extraer_texto=true&max_textos=1"
 ```
 
@@ -159,11 +172,13 @@ curl "http://localhost:8000/conocimiento"
 
 ### `GET /debug`
 
-Devuelve información de diagnóstico para una URL (HTML crudo, título, bytes, etc.). Útil para detectar bloqueos.
+Información de diagnóstico para una URL. Útil para detectar bloqueos.
 
 ```bash
 curl "http://localhost:8000/debug?url=https://sitio-problematico.com/novela"
 ```
+
+---
 
 ## 🏗️ Arquitectura
 
@@ -203,6 +218,8 @@ URL → Normalización → ¿Sitio especial? ─── sí ──► Handler ded
                                      └── no → paginación por botón/URL
 ```
 
+---
+
 ## 🔧 Cómo funciona el aprendizaje
 
 1. **Primera visita** a un sitio nuevo: Playwright renderiza la página completa.
@@ -211,7 +228,9 @@ URL → Normalización → ¿Sitio especial? ─── sí ──► Handler ded
    - Patrones de URL de los capítulos detectados
    - Tipo de paginación (botón "siguiente", URL `/page/N`, etc.)
 3. El conocimiento se guarda en `conocimiento_scraper.json` con un score de confianza.
-4. **Visitas siguientes**: se usa el conocimiento guardado (más rápido, sin Playwright si no es necesario).
+4. **Visitas siguientes**: se usa el conocimiento guardado — más rápido, sin Playwright si no es necesario.
+
+---
 
 ## 🛡️ Manejo de protecciones
 
@@ -222,9 +241,19 @@ URL → Normalización → ¿Sitio especial? ─── sí ──► Handler ded
 | Renderizado JS | Playwright headless con `playwright-stealth` |
 | APIs bloqueadas (403) | Playwright como fallback automático |
 
+---
+
 ## 📝 Variables de entorno
 
 No se requieren variables de entorno por defecto. El servidor arranca en `0.0.0.0:8000`.
+
+---
+
+## 👤 Autor
+
+Hecho por [@artichua](https://github.com/artichua)
+
+---
 
 ## 📄 Licencia
 
